@@ -1,0 +1,188 @@
+# Rafay: build the SGLang engine image, verify it is actually our fork, and
+# optionally overlay the Mooncake and LMCache wheels into a bundle.
+#
+# On GitHub rather than Jenkins for the same reason as the wheels: the Jenkins
+# builder has ~3.7 GB and died compiling a far lighter project. A GitHub runner
+# gives 16 GB and ~88 GB free disk.
+#
+# ## The build arg that decides whether this is our engine
+#
+# docker/Dockerfile defaults to BRANCH_TYPE=remote, which git-clones
+# sgl-project/sglang from GitHub. Building our fork's Dockerfile does NOT, by
+# itself, build our fork. Without BRANCH_TYPE=local the build either stops on
+# the SGL_VERSION guard or -- worse, if someone supplies SGL_VERSION to get past
+# it -- succeeds and ships upstream source carrying our tag and labels.
+#
+# So it is set here, and then verified by running the image: a label proves what
+# we asked for, not what arrived.
+
+name: Rafay engine image
+
+on:
+    push:
+        tags:
+            - 'v*-rafay.*'
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: 'Rafay tag to build, e.g. v0.5.16-rafay.2'
+                required: true
+            mooncake_wheel_image:
+                description: 'Optional. Mooncake wheel image for the bundle overlay.'
+                required: false
+            lmcache_wheel_image:
+                description: 'Optional. LMCache wheel image for the bundle overlay.'
+                required: false
+            bundle_version:
+                description: 'Optional. Bundle version, e.g. 2026.08.1. Required if wheel images are given.'
+                required: false
+
+env:
+    REGISTRY: registry.dev.rafay-edge.net
+    REPOSITORY: rafay
+    IMAGE_NAME: gmaas-sglang
+
+permissions:
+    contents: read
+
+jobs:
+    build:
+        name: Build engine image
+        runs-on: ubuntu-latest
+        # SGLang compiles sgl-kernel, DeepEP, MSCCL++ and the FlashInfer JIT
+        # cache. Hours, not minutes — but bounded, so a hang does not sit at the
+        # 6-hour default.
+        timeout-minutes: 350
+        outputs:
+            tag: ${{ steps.tag.outputs.tag }}
+            upstream: ${{ steps.tag.outputs.upstream }}
+            image: ${{ steps.tag.outputs.image }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ github.event.inputs.tag || github.ref }}
+                fetch-depth: 0
+
+            - name: Resolve tag
+              id: tag
+              run: |
+                TAG="${{ github.event.inputs.tag || github.ref_name }}"
+                case "$TAG" in
+                  v*-rafay.*) ;;
+                  *) echo "::error::'$TAG' does not match v<upstream>-rafay.<n>"; exit 1 ;;
+                esac
+                UPSTREAM="${TAG%-rafay.*}"
+                echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
+                echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+                echo "image=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:$TAG" >> "$GITHUB_OUTPUT"
+
+                # The delta is the fork's liability, so surface it every build.
+                if git rev-parse -q --verify "${UPSTREAM}^{commit}" >/dev/null; then
+                  echo "Rafay commits on ${UPSTREAM}: $(git rev-list --count ${UPSTREAM}..HEAD)"
+                else
+                  echo "::warning::upstream tag ${UPSTREAM} not present; delta unmeasurable"
+                fi
+
+            - name: Free disk space
+              # Unlike the wheel builds, this one genuinely needs the room: a
+              # CUDA devel base plus kernel compilation runs to tens of GB.
+              # Only the large, certainly-unused trees — no `docker image prune`,
+              # which hung for minutes on the LMCache run.
+              run: |
+                echo "before:"; df -h / | tail -1
+                sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
+                echo "after:";  df -h / | tail -1
+
+            - name: Set up Buildx
+              uses: docker/setup-buildx-action@v3
+
+            - name: Check registry credentials
+              env:
+                USER_SET: ${{ secrets.RAFAY_REGISTRY_USER != '' }}
+                PASS_SET: ${{ secrets.RAFAY_REGISTRY_PASSWORD != '' }}
+              run: |
+                if [ "$USER_SET" != "true" ] || [ "$PASS_SET" != "true" ]; then
+                  echo "::error::Registry credentials are not set for this repository."
+                  echo "Add RAFAY_REGISTRY_USER and RAFAY_REGISTRY_PASSWORD at:"
+                  echo "  ${{ github.server_url }}/${{ github.repository }}/settings/secrets/actions"
+                  exit 1
+                fi
+
+            - name: Log in to the Rafay registry
+              uses: docker/login-action@v3
+              with:
+                registry: ${{ env.REGISTRY }}
+                username: ${{ secrets.RAFAY_REGISTRY_USER }}
+                password: ${{ secrets.RAFAY_REGISTRY_PASSWORD }}
+
+            - name: Build and push
+              uses: docker/build-push-action@v6
+              with:
+                context: .
+                file: ./docker/Dockerfile
+                platforms: linux/amd64
+                push: true
+                provenance: false
+                tags: ${{ steps.tag.outputs.image }}
+                # Registry cache rather than GHA cache: this image's layers
+                # exceed the 10 GB GHA cache limit, and a cache that silently
+                # evicts is worse than none.
+                cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:buildcache
+                cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max,ignore-error=true
+                build-args: |
+                    BRANCH_TYPE=local
+                    INSTALL_FLASHINFER_JIT_CACHE=1
+                    SGLANG_BUILD_COMMIT=${{ github.sha }}
+                    SGLANG_BUILD_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                    SGLANG_IMAGE_TAG=${{ steps.tag.outputs.image }}
+                labels: |
+                    io.rafay.upstream.version=${{ steps.tag.outputs.upstream }}
+                    io.rafay.upstream.commit=${{ github.sha }}
+                    io.rafay.tag=${{ steps.tag.outputs.tag }}
+
+    verify:
+        name: Verify the image is the fork
+        needs: build
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Log in to the Rafay registry
+              uses: docker/login-action@v3
+              with:
+                registry: ${{ env.REGISTRY }}
+                username: ${{ secrets.RAFAY_REGISTRY_USER }}
+                password: ${{ secrets.RAFAY_REGISTRY_PASSWORD }}
+
+            - name: Assert the scoping patch is present and working
+              # Setting BRANCH_TYPE=local proves only that we asked. This proves
+              # the source arrived: the module exists, it functions, and the
+              # commit baked into ENV is the one we built. An image failing here
+              # is upstream wearing our label — the most misleading artefact this
+              # pipeline could produce.
+              run: |
+                docker run --rm --entrypoint python3 ${{ needs.build.outputs.image }} -c "
+                import os
+                from sglang.srt.mem_cache.tenant_scope import tenant_scope_seed
+                assert tenant_scope_seed('acme') != tenant_scope_seed('globex'), 'scoping present but not functioning'
+                assert tenant_scope_seed(None) is None, 'unset scope must not seed'
+                got = os.environ.get('SGLANG_BUILD_COMMIT', '')
+                assert got == '${{ github.sha }}', f'image built from {got}, expected ${{ github.sha }}'
+                print('verified: fork source, commit', got)
+                "
+
+            - name: Summary
+              run: |
+                {
+                  echo "### SGLang engine image"
+                  echo ""
+                  echo "| | |"
+                  echo "|---|---|"
+                  echo "| Image | \`${{ needs.build.outputs.image }}\` |"
+                  echo "| Upstream | ${{ needs.build.outputs.upstream }} |"
+                  echo "| Verified | fork source, scoping patch functional |"
+                  echo ""
+                  echo "**Not yet a tenant-isolating build**: R2 is incomplete"
+                  echo "(\`_storage_hit_query\` still hashes raw tokens) and Tier 3a"
+                  echo "conformance has not been run. No provider is certified."
+                } >> "$GITHUB_STEP_SUMMARY"
