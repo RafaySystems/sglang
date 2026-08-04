@@ -91,6 +91,26 @@ jobs:
 
             - name: Set up Buildx
               uses: docker/setup-buildx-action@v3
+              with:
+                # BuildKit runs independent stages concurrently by default. This
+                # Dockerfile has several heavy ones -- DeepEP, MSCCL++, sgl-kernel,
+                # and a `cargo build --release` of sgl-model-gateway -- and a
+                # release rustc build alone can want several GB per codegen unit.
+                # On a 16 GB runner, two or three of those at once is an OOM, and
+                # the OOM killer produces no error: the log simply stops
+                # mid-stage, which is exactly what the first run did.
+                buildkitd-config-inline: |
+                  [worker.oci]
+                    max-parallelism = 2
+
+            - name: Report builder capacity
+              # The first run died with no diagnostic. Print the numbers so the
+              # next failure is readable from the log rather than inferred from
+              # its absence.
+              run: |
+                echo "memory:"; free -h | sed -n '1,2p'
+                echo "cpus:   $(nproc)"
+                echo "disk:";   df -h / | tail -1
 
             - name: Check registry credentials
               env:
