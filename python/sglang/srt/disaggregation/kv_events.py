@@ -117,6 +117,12 @@ class BlockStored(KVCacheEvent):
 class BlockRemoved(KVCacheEvent):
     block_hashes: list[int]
     medium: Optional[str] = None
+    # Rafay: the scope the blocks were stored under (lora id, cache salt,
+    # tenant). Without it an eviction is unattributable, so a per-tenant
+    # retention floor can be enforced but never **proven** — the difference
+    # between a policy and a guarantee. Optional, so single-tenant payloads are
+    # unchanged.
+    extra_key: Optional[str] = None
 
 
 class AllBlocksCleared(KVCacheEvent):

@@ -108,7 +108,11 @@ class KVCacheEventMixin:
 
             if block_hashes:
                 self.kv_event_queue.append(
-                    BlockRemoved(block_hashes=block_hashes, medium=medium)
+                    BlockRemoved(
+                        block_hashes=block_hashes,
+                        medium=medium,
+                        extra_key=getattr(node.key, "extra_key", None),
+                    )
                 )
 
     def _record_all_cleared_event(self):
