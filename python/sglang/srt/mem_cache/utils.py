@@ -15,6 +15,8 @@
 
 from typing import Any, Callable, List, Optional, Tuple
 
+from sglang.srt.mem_cache.tenant_scope import tenant_scope_seed
+
 from sglang.kernels.ops.kvcache.mla_buffer import (
     get_mla_kv_buffer_kernel as get_mla_kv_buffer_kernel,
 )
@@ -129,6 +131,12 @@ def compute_node_hash_values(node: Any, page_size: int) -> List[str]:
     if node.parent is not None and node.parent.hash_value is not None:
         if len(node.parent.key) > 0 and len(node.parent.hash_value) > 0:
             parent_hash = node.parent.hash_value[-1]
+
+    # Rafay: at the root boundary there is no parent to chain from, so this is
+    # where a tenant scope enters the chain. Descendants inherit it through
+    # ``parent_hash`` and need no special handling.
+    if parent_hash is None:
+        parent_hash = tenant_scope_seed(getattr(node.key, "extra_key", None))
 
     hash_values = get_hash_str(node.key, parent_hash, page_size=page_size)
     assert isinstance(hash_values, list)
