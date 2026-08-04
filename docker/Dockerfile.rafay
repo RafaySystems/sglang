@@ -64,10 +64,17 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         /tmp/rafay-wheels/lmcache/*.whl; \
     rm -rf /tmp/rafay-wheels
 
-# Prove the overlay took. A build reaching here with upstream packages still
-# installed has failed at its only job and must not become an image — that
-# artefact would carry our tag, our labels and our conformance claim over
-# somebody else's code.
+# Prove the overlay took, and that the wheels actually load.
+#
+# **This is where the torch ABI pairing is checked.** The wheel pipelines build
+# independently, against a TORCH_VERSION they are told to match. Nothing forces
+# that to be true — so import the modules here, where both halves are present.
+# A wheel built against the wrong torch fails at import, and it fails in CI
+# naming both versions rather than in a serving pod at 3am.
+#
+# A build reaching this point with upstream packages still installed, or with
+# wheels that cannot load, must not become an image: that artefact would carry
+# our tag, our labels and our conformance claim over code that does not work.
 RUN python3 - <<'PY'
 import importlib.metadata as md
 import os, sys
@@ -89,10 +96,25 @@ for pkg, want in expected.items():
     if want and want not in got:
         problems.append(f"{pkg}: installed {got}, expected to contain {want}")
 
+# Import, do not merely check metadata. A version string proves the wheel was
+# installed; only an import proves it links against this image's torch.
+import torch
+for mod in ("mooncake", "lmcache"):
+    try:
+        __import__(mod)
+    except Exception as exc:
+        problems.append(
+            f"{mod}: installed but will not import against torch {torch.__version__} "
+            f"(cuda {torch.version.cuda}) -- {type(exc).__name__}: {exc}"
+        )
+
 if problems:
     print("Rafay overlay verification FAILED:", *problems, sep="\n  ")
+    print("\nIf this is an ABI failure, rebuild the wheel with TORCH_VERSION/CUDA_TAG "
+          "matching this image.")
     sys.exit(1)
-print("Rafay overlay verified:", {k: md.version(k) for k in expected})
+print("Rafay overlay verified against torch", torch.__version__,
+      {k: md.version(k) for k in expected})
 PY
 
 LABEL io.rafay.bundle="${BUNDLE_VERSION}" \
