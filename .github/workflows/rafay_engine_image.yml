@@ -43,7 +43,11 @@ permissions:
 jobs:
     build:
         name: Build engine image
-        runs-on: ubuntu-latest
+        # A larger runner: the standard one is 4 cores / 16 GB, and this build
+        # died there with no error -- the log simply stopped inside a
+        # `cargo build --release` running concurrently with DeepEP and framework.
+        # 8 cores brings ~32 GB, which is the number that actually matters here.
+        runs-on: ${{ vars.RAFAY_BUILD_RUNNER || 'ubuntu-latest-8-cores' }}
         # SGLang compiles sgl-kernel, DeepEP, MSCCL++ and the FlashInfer JIT
         # cache. Hours, not minutes — but bounded, so a hang does not sit at the
         # 6-hour default.
@@ -99,9 +103,13 @@ jobs:
                 # On a 16 GB runner, two or three of those at once is an OOM, and
                 # the OOM killer produces no error: the log simply stops
                 # mid-stage, which is exactly what the first run did.
+                # Still bounded, but less tightly than on a 4-core runner: the
+                # constraint is memory per concurrent stage, not core count, and
+                # a release rustc build can want several GB per codegen unit.
+                # Raise if the capacity report below shows headroom to spare.
                 buildkitd-config-inline: |
                   [worker.oci]
-                    max-parallelism = 2
+                    max-parallelism = 4
 
             - name: Report builder capacity
               # The first run died with no diagnostic. Print the numbers so the
