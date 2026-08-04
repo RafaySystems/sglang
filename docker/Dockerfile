@@ -35,9 +35,28 @@ ENV PATH="${PATH}:/usr/local/nvidia/bin" \
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
 
 # Replace Ubuntu sources if specified
+#
+# Rafay: two fixes to this block.
+#
+#  1. Ubuntu 24.04 (noble) uses the deb822 format at
+#     /etc/apt/sources.list.d/ubuntu.sources. The original sed only rewrote
+#     /etc/apt/sources.list, which noble does not ship -- so UBUNTU_MIRROR was
+#     silently a no-op on this base image, and apt still went to
+#     archive.ubuntu.com.
+#  2. `runtime` is a separate FROM and never inherited this rewrite, so the
+#     stage that installs the RDMA and NCCL runtime always used the default
+#     mirrors regardless. The same block now appears there too.
+#
+# On a build host with restricted egress, the symptom was a long apt timeout
+# against archive.ubuntu.com while security.ubuntu.com and the NVIDIA repo
+# resolved fine -- which reads as a flaky network rather than an unused arg.
 RUN if [ -n "$UBUNTU_MIRROR" ]; then \
-    sed -i "s|http://.*archive.ubuntu.com|$UBUNTU_MIRROR|g" /etc/apt/sources.list && \
-    sed -i "s|http://.*security.ubuntu.com|$UBUNTU_MIRROR|g" /etc/apt/sources.list; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i "s|http://[^ ]*archive.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" "$f"; \
+        sed -i "s|http://[^ ]*security.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" "$f"; \
+    done; \
+    echo "apt mirrors after rewrite:"; grep -rhE "^(deb |URIs:)" /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | sort -u; \
 fi
 
 # Python setup (combined with apt update to reduce layers)
@@ -796,6 +815,17 @@ LABEL org.opencontainers.image.source="https://github.com/sgl-project/sglang" \
 #
 # Note: Uses devel base for complete NVCC toolchain required by DeepGEMM JIT
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS runtime
+
+# Rafay: runtime is a separate FROM, so it needs UBUNTU_MIRROR declared and
+# applied again -- the base stage's rewrite does not reach here.
+ARG UBUNTU_MIRROR
+RUN if [ -n "$UBUNTU_MIRROR" ]; then \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+        [ -f "$f" ] || continue; \
+        sed -i "s|http://[^ ]*archive.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" "$f"; \
+        sed -i "s|http://[^ ]*security.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" "$f"; \
+    done; \
+fi
 
 ARG CUDA_VERSION
 ARG TARGETARCH

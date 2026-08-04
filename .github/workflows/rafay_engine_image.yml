@@ -27,6 +27,9 @@ on:
             tag:
                 description: 'Rafay tag to build, e.g. v0.5.16-rafay.2'
                 required: true
+            ubuntu_mirror:
+                description: 'Optional apt mirror, e.g. http://mirror.internal/ubuntu. Needed where archive.ubuntu.com is not reachable.'
+                required: false
             skip_bundle:
                 description: 'Build the base image only, without the wheel overlay.'
                 type: boolean
@@ -163,6 +166,7 @@ jobs:
                 cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max,ignore-error=true
                 build-args: |
                     BRANCH_TYPE=local
+                    UBUNTU_MIRROR=${{ github.event.inputs.ubuntu_mirror || vars.RAFAY_UBUNTU_MIRROR }}
                     MAX_JOBS=2
                     CARGO_BUILD_JOBS=2
                     BUILD_AND_DOWNLOAD_PARALLEL=2
