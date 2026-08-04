@@ -1,0 +1,35 @@
+# The engine bundle — which three artefacts ship together.
+#
+# Committed rather than passed as a build parameter, because a tag-triggered
+# build has no one to ask. With this in the tree, **the git tag determines the
+# bundle**: checking out v0.5.16-rafay.2 tells you exactly which Mooncake and
+# LMCache it was built against, months later, without consulting a CI log that
+# may have been pruned.
+#
+# It also makes changing a component a reviewable commit rather than a text box
+# someone filled in differently the second time.
+#
+# Bundle versions are YYYY.MM.N, deliberately not SemVer: a bundle has no API of
+# its own. It is a dated set of things known to work together, and a SemVer
+# number would invite compatibility reasoning the bundle does not support.
+
+bundle: 2026.08.1
+
+components:
+    # sglang is this repository at the tag being built — not named here, or it
+    # would be a second place to update and a second place to get wrong.
+    mooncake:
+        image: registry.dev.rafay-edge.net/rafay/gmaas-mooncake-wheel
+        tag: v0.3.12.post1-rafay.1
+    lmcache:
+        image: registry.dev.rafay-edge.net/rafay/gmaas-lmcache-wheel
+        tag: v0.5.2-rafay.1
+
+# Torch must agree across all three or the wheels will not import into the
+# engine. 2.11.0 is pinned identically in SGLang v0.5.16's [project] and
+# LMCache's [build-system]; Mooncake's CU13 build targets it too.
+#
+# This is documentation, not enforcement — the bundle build imports both modules
+# against the engine's torch, so a mismatch fails there rather than here.
+torch: 2.11.0
+cuda: "13.0"
