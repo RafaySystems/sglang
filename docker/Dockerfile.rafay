@@ -1,0 +1,100 @@
+# Rafay engine bundle — overlay that copies wheels from per-fork wheel images.
+#
+# Builds the image that ships: our SGLang, our Mooncake, our LMCache.
+#
+# ## Why COPY --from wheel images rather than pip install
+#
+# The forks are not published to any pip index and will not be. So the wheel has
+# to come from somewhere we build. Two ways to do that, and this takes the
+# second:
+#
+#   a) `git clone` the forks and build them here. Self-contained, and rebuilds
+#      two CUDA/C++ projects on every SGLang build — minutes of compute for
+#      source that did not change.
+#   b) Each fork's own pipeline produces a **wheel image**, tagged with that
+#      fork's Rafay tag, and this file copies the artefact out.
+#
+# (b) also makes the bundle honest: each component is built, versioned and
+# tagged by its own pipeline, and the bundle is the act of naming three specific
+# artefacts. With (a) the "Mooncake version" would be whatever a git ref
+# resolved to at build time, which is exactly the ambiguity the tagging scheme
+# exists to remove.
+#
+# ## Why this FROMs the upstream-built base rather than copying docker/Dockerfile
+#
+# `docker/Dockerfile` is ~950 lines and churns with every CUDA and kernel bump.
+# A copied Dockerfile does not conflict — **it silently rots**. There is no merge
+# to resolve and no signal of falling behind, only divergence discovered when
+# something fails months later. The base is built from that file *in our fork*
+# (with BRANCH_TYPE=local, so it carries our SGLang source), and this file adds
+# only what pip cannot be pointed at from there.
+#
+# ## Contract for a wheel image
+#
+# A wheel image places its artefacts in **/wheels** and contains nothing else of
+# consequence. `scratch` is enough. Building it is the job of
+# `Jenkinsfile.rafay` in each fork.
+
+ARG BASE_IMAGE
+ARG MOONCAKE_WHEEL_IMAGE
+ARG LMCACHE_WHEEL_IMAGE
+
+FROM ${MOONCAKE_WHEEL_IMAGE} AS mooncake_wheels
+FROM ${LMCACHE_WHEEL_IMAGE}  AS lmcache_wheels
+
+FROM ${BASE_IMAGE}
+
+ARG MOONCAKE_VERSION
+ARG LMCACHE_VERSION
+ARG BUNDLE_VERSION=unknown
+
+COPY --from=mooncake_wheels /wheels /tmp/rafay-wheels/mooncake
+COPY --from=lmcache_wheels  /wheels /tmp/rafay-wheels/lmcache
+
+# --force-reinstall: the base already installed upstream mooncake-transfer-engine
+#   from PyPI, and pip may consider the requirement satisfied by version alone.
+# --no-deps: a fork's dependency metadata must not quietly pull a different
+#   transitive set than the base was built and tested against.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    set -eu; \
+    ls /tmp/rafay-wheels/mooncake/*.whl >/dev/null 2>&1 || { echo "no Mooncake wheel in ${MOONCAKE_WHEEL_IMAGE}"; exit 1; }; \
+    ls /tmp/rafay-wheels/lmcache/*.whl  >/dev/null 2>&1 || { echo "no LMCache wheel in ${LMCACHE_WHEEL_IMAGE}";  exit 1; }; \
+    python3 -m pip install --force-reinstall --no-deps \
+        /tmp/rafay-wheels/mooncake/*.whl \
+        /tmp/rafay-wheels/lmcache/*.whl; \
+    rm -rf /tmp/rafay-wheels
+
+# Prove the overlay took. A build reaching here with upstream packages still
+# installed has failed at its only job and must not become an image — that
+# artefact would carry our tag, our labels and our conformance claim over
+# somebody else's code.
+RUN python3 - <<'PY'
+import importlib.metadata as md
+import os, sys
+
+expected = {
+    "mooncake-transfer-engine": os.environ.get("EXPECT_MOONCAKE", ""),
+    "lmcache": os.environ.get("EXPECT_LMCACHE", ""),
+}
+problems = []
+for pkg, want in expected.items():
+    try:
+        got = md.version(pkg)
+    except md.PackageNotFoundError:
+        problems.append(f"{pkg}: not installed")
+        continue
+    # Substring rather than equality: a wheel built from a Rafay tag may carry a
+    # local version segment (e.g. 0.3.12.post1+rafay.1) that does not match the
+    # tag string byte for byte. What must hold is that it is *ours*.
+    if want and want not in got:
+        problems.append(f"{pkg}: installed {got}, expected to contain {want}")
+
+if problems:
+    print("Rafay overlay verification FAILED:", *problems, sep="\n  ")
+    sys.exit(1)
+print("Rafay overlay verified:", {k: md.version(k) for k in expected})
+PY
+
+LABEL io.rafay.bundle="${BUNDLE_VERSION}" \
+      io.rafay.component.mooncake="${MOONCAKE_VERSION}" \
+      io.rafay.component.lmcache="${LMCACHE_VERSION}"
