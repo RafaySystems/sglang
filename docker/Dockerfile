@@ -59,6 +59,25 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
     echo "apt mirrors after rewrite:"; grep -rhE "^(deb |URIs:)" /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null | sort -u; \
 fi
 
+# Rafay: make apt survive a slow or flaky egress path.
+#
+# The build host reached archive.ubuntu.com at ~13 KB/s with repeated connection
+# timeouts, while the NVIDIA repo (HTTPS) pulled 210 MB without trouble --
+# the signature of a transparent proxy mangling port 80 rather than a block.
+# Some fetches succeeded, most timed out, and apt gives up on the first failure
+# by default, so a build could get 90% of the way through and die.
+#
+# Retries and longer timeouts turn "one slow object kills the layer" into
+# "slow but finishes". Set UBUNTU_MIRROR to an HTTPS or internal mirror to fix
+# the cause rather than the symptom.
+RUN printf '%s\n' \
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "60";' \
+      'Acquire::https::Timeout "60";' \
+      'Acquire::ftp::Timeout "60";' \
+      'Acquire::http::Pipeline-Depth "0";' \
+      > /etc/apt/apt.conf.d/99rafay-retries
+
 # Python setup (combined with apt update to reduce layers)
 # Ubuntu 24.04 ships Python 3.12 in main, so we no longer need the deadsnakes
 # PPA. Dropping it avoids transient Launchpad 504s in `add-apt-repository`.
@@ -826,6 +845,25 @@ RUN if [ -n "$UBUNTU_MIRROR" ]; then \
         sed -i "s|http://[^ ]*security.ubuntu.com/ubuntu|$UBUNTU_MIRROR|g" "$f"; \
     done; \
 fi
+
+# Rafay: make apt survive a slow or flaky egress path.
+#
+# The build host reached archive.ubuntu.com at ~13 KB/s with repeated connection
+# timeouts, while the NVIDIA repo (HTTPS) pulled 210 MB without trouble --
+# the signature of a transparent proxy mangling port 80 rather than a block.
+# Some fetches succeeded, most timed out, and apt gives up on the first failure
+# by default, so a build could get 90% of the way through and die.
+#
+# Retries and longer timeouts turn "one slow object kills the layer" into
+# "slow but finishes". Set UBUNTU_MIRROR to an HTTPS or internal mirror to fix
+# the cause rather than the symptom.
+RUN printf '%s\n' \
+      'Acquire::Retries "8";' \
+      'Acquire::http::Timeout "60";' \
+      'Acquire::https::Timeout "60";' \
+      'Acquire::ftp::Timeout "60";' \
+      'Acquire::http::Pipeline-Depth "0";' \
+      > /etc/apt/apt.conf.d/99rafay-retries
 
 ARG CUDA_VERSION
 ARG TARGETARCH
