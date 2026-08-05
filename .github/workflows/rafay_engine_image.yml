@@ -221,6 +221,14 @@ jobs:
                     # that narrows what the image can run on, so it is a
                     # deliberate choice rather than a default.
                     RAFAY_CUDA_ARCH_LIST=${{ vars.RAFAY_CUDA_ARCH_LIST }}
+                    # 0: do not build sgl-model-gateway into the engine image.
+                    # It costs a Rust toolchain install and two --release builds
+                    # (one with vendored OpenSSL) to produce a binary and a
+                    # `sglang-router` wheel this image never invokes -- it serves
+                    # gRPC through smg-grpc-servicer, and routing is smg-gmaas in
+                    # its own image. The wheel is referenced only by upstream
+                    # test utilities and docs, not by anything under srt/.
+                    BUILD_MODEL_GATEWAY=0
                     SGLANG_BUILD_COMMIT=${{ github.sha }}
                     SGLANG_BUILD_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
                     SGLANG_IMAGE_TAG=${{ steps.tag.outputs.image }}

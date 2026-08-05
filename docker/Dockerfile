@@ -515,6 +515,20 @@ ARG BRANCH_TYPE
 ARG SGL_VERSION
 ARG USE_LATEST_SGLANG
 
+# Rafay: skip this build when the image will not run the gateway.
+#
+# It installs a Rust toolchain and does two --release builds, one of them with
+# `vendored-openssl` -- OpenSSL compiled from source. Minutes of CPU and a large
+# share of the memory budget, for a binary and a `sglang-router` wheel that our
+# engine image never invokes: it serves gRPC through smg-grpc-servicer, and
+# routing is smg-gmaas in a separate image.
+#
+# Default is 1, so upstream behaviour is unchanged and this is inert unless set.
+# The stage still produces both artefacts -- an empty wheel directory and a
+# placeholder binary -- because the runtime stage COPYs them unconditionally and
+# a Dockerfile cannot make a COPY conditional.
+ARG BUILD_MODEL_GATEWAY=1
+
 WORKDIR /build
 
 # Copy ONLY the gateway source (not the full repo)
@@ -522,7 +536,14 @@ COPY sgl-model-gateway /build/sgl-model-gateway
 
 # Install Rust, build gateway binary and Python bindings, then clean up Rust toolchain
 RUN --mount=type=cache,target=/root/.cache/pip \
-    curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    mkdir -p /build/gateway_wheels \
+    && if [ "$BUILD_MODEL_GATEWAY" != "1" ]; then \
+        echo "Rafay: BUILD_MODEL_GATEWAY=$BUILD_MODEL_GATEWAY -- skipping the Rust gateway build"; \
+        printf '#!/bin/sh\necho "sgl-model-gateway was not built into this image (BUILD_MODEL_GATEWAY=0); routing is smg-gmaas" >&2\nexit 1\n' > /build/sgl-model-gateway-bin; \
+        chmod +x /build/sgl-model-gateway-bin; \
+        exit 0; \
+    fi \
+    && curl --proto '=https' --tlsv1.2 --retry 3 --retry-delay 2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && export PATH="/root/.cargo/bin:${PATH}" \
     && python3 -m pip install maturin \
     && cd /build/sgl-model-gateway/bindings/python \
@@ -818,7 +839,9 @@ COPY --from=gateway_builder /build/gateway_wheels /tmp/gateway_wheels
 # --no-deps so it cannot re-resolve and replace Dynamo's shared dependencies.
 # Otherwise resolve the gateway's own dependencies normally.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "$INSTALL_DYNAMO" = "1" ]; then \
+    if ! ls /tmp/gateway_wheels/*.whl >/dev/null 2>&1; then \
+        echo "no gateway wheel to install (BUILD_MODEL_GATEWAY=0)"; \
+    elif [ "$INSTALL_DYNAMO" = "1" ]; then \
         python3 -m pip install --force-reinstall --no-deps /tmp/gateway_wheels/*.whl; \
     else \
         python3 -m pip install --force-reinstall /tmp/gateway_wheels/*.whl; \
