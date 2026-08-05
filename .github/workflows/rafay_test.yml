@@ -67,7 +67,7 @@ jobs:
               run: |
                 python -m pip install --upgrade pip
                 pip install torch --index-url https://download.pytorch.org/whl/cpu
-                pip install triton orjson pybase64 pillow pyyaml pydantic tqdm \
+                pip install triton orjson pybase64 pillow pyyaml pydantic tqdm psutil \
                   transformers "numpy<2" msgspec pytest
 
             # No torch, no imports at all -- these deliberately load their
