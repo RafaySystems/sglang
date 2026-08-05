@@ -218,7 +218,7 @@ class LMCRadixCache(RadixCache):
         the held read locks and returns the radix-only result.
         """
         token_ids = key.raw_token_ids()
-        matched = self.lmcache_connector.lookup_kv(token_ids, req.rid)
+        matched = self.lmcache_connector.lookup_kv(token_ids, req.rid, key.extra_key)
         if matched <= value.numel():
             # Release the read locks; keep the pending session for end_session.
             self.lmcache_connector.release_pending(req.rid)
@@ -269,6 +269,7 @@ class LMCRadixCache(RadixCache):
                 value_numel=int(value.numel()),
                 slot_mapping=sm,
                 prefix_pad=pp,
+                extra_key=key.extra_key,
             ),
         )
         if result is None:
@@ -401,6 +402,7 @@ class LMCRadixCache(RadixCache):
                     offset=marker.value_numel - prefix_pad,
                     prefix_pad=prefix_pad,
                     request_id=request_id,
+                    extra_key=marker.key.extra_key,
                 )
             )
         torch.cuda.current_stream().wait_stream(self.load_stream)
@@ -413,6 +415,7 @@ class LMCRadixCache(RadixCache):
         value_numel: int,
         slot_mapping: torch.Tensor,
         prefix_pad: int,
+        extra_key: Optional[str] = None,
     ) -> int:
         """IP layerwise loader: kick off ``start_load_kv`` on ``self.load_stream``.
 
@@ -425,6 +428,7 @@ class LMCRadixCache(RadixCache):
                     token_ids=token_ids,
                     slot_mapping=slot_mapping,
                     offset=value_numel - prefix_pad,
+                    extra_key=extra_key,
                 )
             )
 
@@ -471,6 +475,7 @@ class LMCRadixCache(RadixCache):
             kv_indices=kv_indices,
             offset=0,
             request_id=req.rid,
+            extra_key=req.extra_key,
         )
         with torch.cuda.stream(self.store_stream):
             self.lmcache_connector.store_kv(store_md)
