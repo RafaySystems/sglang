@@ -50,6 +50,12 @@ permissions:
 jobs:
     tenant-isolation:
         name: Tenant isolation tests
+        # Dependabot opens a PR per dependency, and this fork inherited a very
+        # active Dependabot. Each PR fired the full four-version matrix over the
+        # whole suite -- 15 runs queued within minutes of the repo being
+        # created. Real PRs are still covered; bot PRs are not worth a matrix
+        # each, and the branch push that follows a merge tests the result anyway.
+        if: github.actor != 'dependabot[bot]'
         runs-on: ubuntu-latest
         steps:
             - name: Checkout
