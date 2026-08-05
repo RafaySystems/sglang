@@ -41,7 +41,16 @@ defaults:
         shell: bash
 
 concurrency:
-    group: rafay-test-${{ github.ref }}
+    # `github.workflow` is in the key on purpose. A tag push starts this
+    # workflow twice: once on its own `push: tags:` trigger, and once as the
+    # `workflow_call` inside the image build. Keyed on `github.ref` alone both
+    # land in the same group, `cancel-in-progress` fires, and the one inside
+    # the image build loses -- taking the build, bundle and verify jobs with it
+    # as "skipped". The run then reports in seconds and looks like a no-op.
+    #
+    # For a called workflow `github.workflow` is the caller's name, so the two
+    # get distinct groups and only genuine re-pushes cancel anything.
+    group: rafay-test-${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: true
 
 permissions:
