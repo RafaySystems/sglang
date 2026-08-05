@@ -1,0 +1,91 @@
+# Rafay: run the tenant-isolation tests in this fork.
+#
+# ## Why this file exists
+#
+# `rafay_engine_image.yml` builds and publishes the engine image on a tag. It
+# never ran `test/srt/rafay/`. So the tests guarding the patches this fork
+# exists for -- chain-seed hashing, storage-path scoping, what reaches Mooncake
+# -- executed only when someone remembered to run them by hand, while images
+# carrying those patches shipped on every tag.
+#
+# The upstream CI is not a substitute: it tests upstream's concerns on
+# GPU runners we do not have, and it does not know these files exist.
+#
+# ## Why it does not install SGLang
+#
+# Building SGLang pulls a CUDA toolchain, and none of these tests need one.
+# They import specific modules from `python/` via `PYTHONPATH` with only the
+# libraries those modules actually touch. That keeps this job in the
+# single-digit minutes, which is what makes it viable as a gate on every push
+# rather than a nightly.
+#
+# The tradeoff is that this covers **key derivation and transport, not
+# inference**. It cannot see a regression that only appears with real KV
+# tensors moving between tiers. That is Tier 3a, it needs GPUs, and it does not
+# exist yet -- see `kubeless-me/docs/model-engine-gaps.md` G-25.
+
+name: Rafay test
+
+on:
+    push:
+        branches:
+            - 'rafay/**'
+        tags:
+            - 'v*-rafay.*'
+    pull_request:
+    workflow_call:
+    workflow_dispatch:
+
+defaults:
+    run:
+        shell: bash
+
+concurrency:
+    group: rafay-test-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    tenant-isolation:
+        name: Tenant isolation tests
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+                cache: pip
+
+            # torch from the CPU index on purpose: the CUDA wheel is several GB
+            # and nothing here runs a kernel.
+            - name: Install dependencies
+              run: |
+                python -m pip install --upgrade pip
+                pip install torch --index-url https://download.pytorch.org/whl/cpu
+                pip install triton orjson pybase64 pillow pyyaml pydantic tqdm \
+                  transformers "numpy<2" msgspec pytest
+
+            # No torch, no imports at all -- these deliberately load their
+            # module by path so they gate every PR regardless of environment.
+            # Run first: if the derivation itself is broken, everything below
+            # is noise.
+            - name: Scope derivation and storage seeding
+              run: |
+                python -m pytest -q \
+                  test/srt/rafay/test_tenant_scoping.py \
+                  test/srt/rafay/test_storage_scope.py
+
+            # RAFAY_REQUIRE_MOONCAKE_IMPORT turns a skip into a hard error.
+            # Without it a missing dependency would skip the file, pytest would
+            # exit 0, and this job would report success having asserted nothing
+            # -- the exact shape of failure these tests exist to catch.
+            - name: Mooncake keying
+              env:
+                RAFAY_REQUIRE_MOONCAKE_IMPORT: "1"
+                PYTHONPATH: ${{ github.workspace }}/python
+              run: python -m pytest -q -rs test/srt/rafay/test_mooncake_keying.py

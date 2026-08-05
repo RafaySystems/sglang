@@ -25,9 +25,9 @@ and belongs to Tier 3a. This closes the middle link: the one place our code
 could silently discard the scope between the engine and the backend.
 """
 
+import os
 import unittest
 from typing import List, Optional
-from unittest import mock
 
 # Two tenants' key sets for the same content. In production these come out of
 # the chain-seeded hash, so they are unequal by construction; here they are
@@ -83,6 +83,17 @@ try:  # pragma: no cover - import guard, not logic
     _AVAILABLE, _WHY = True, ""
 except Exception as exc:  # noqa: BLE001 - reported, not handled
     _AVAILABLE, _WHY = False, f"{type(exc).__name__}: {exc}"
+
+# Skipping is right on a laptop and wrong in CI, where the whole reason to run
+# on Linux is that this import works. pytest exits 0 on skips, so without this
+# a harness reports PASS having asserted nothing -- the failure mode these
+# tests exist to catch, reproduced in the test runner.
+if os.environ.get("RAFAY_REQUIRE_MOONCAKE_IMPORT") and not _AVAILABLE:
+    raise RuntimeError(
+        f"RAFAY_REQUIRE_MOONCAKE_IMPORT is set but MooncakeStore will not "
+        f"import: {_WHY}. Either install the missing dependency or unset the "
+        f"variable -- do not let this skip silently."
+    )
 
 
 @unittest.skipUnless(_AVAILABLE, f"MooncakeStore not importable -- {_WHY}")

@@ -44,8 +44,16 @@ permissions:
     contents: read
 
 jobs:
+    # The isolation tests gate the image. This build takes hours; the tests take
+    # minutes, and an image that ships without them is an image carrying the
+    # tenant-scoping patches with nothing having checked them.
+    test:
+        name: Test
+        uses: ./.github/workflows/rafay_test.yml
+
     build:
         name: Build engine image
+        needs: test
         # Standard runner: 4 cores / 16 GB. Larger runners are not available
         # here, so the build has to fit rather than be given more room -- see
         # max-parallelism below, which is what makes it fit.
