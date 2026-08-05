@@ -139,6 +139,23 @@ jobs:
                 echo "cpus:   $(nproc)"
                 echo "disk:";   df -h / | tail -1
 
+            - name: Sample memory during the build
+              # The previous failure left no evidence at all -- no compiler
+              # error, no exit code, just silence and a cancelled job. Peak
+              # memory is the one number that distinguishes "the host ran out"
+              # from "the runner was reclaimed", and it cannot be recovered
+              # after the fact. Sample it now so the next failure is diagnosed
+              # rather than inferred.
+              run: |
+                nohup bash -c '
+                  peak=0
+                  while true; do
+                    used=$(free -m | awk "/^Mem:/ {print \$3}")
+                    [ "$used" -gt "$peak" ] && peak=$used && echo "$(date -u +%H:%M:%S) peak_used_mb=$peak"
+                    sleep 5
+                  done' > /tmp/mem-sample.log 2>&1 &
+                echo "sampler started"
+
             - name: Check registry credentials
               env:
                 USER_SET: ${{ secrets.RAFAY_REGISTRY_USER != '' }}
@@ -175,9 +192,21 @@ jobs:
                 build-args: |
                     BRANCH_TYPE=local
                     UBUNTU_MIRROR=${{ github.event.inputs.ubuntu_mirror || vars.RAFAY_UBUNTU_MIRROR || 'https://archive.ubuntu.com/ubuntu' }}
-                    MAX_JOBS=2
-                    CARGO_BUILD_JOBS=2
-                    BUILD_AND_DOWNLOAD_PARALLEL=2
+                    # 1, not 2. Run 30929746689 died 41 minutes in, mid-nvcc,
+                    # with no compiler error: the log stopped and the job ended
+                    # "The operation was canceled" -- the self-hosted runner
+                    # stopped answering, which is what a host OOM looks like
+                    # from GitHub's side. The same workload killed the Jenkins
+                    # agent outright ("Cannot contact node-1").
+                    #
+                    # nvcc on SM90 CUTLASS/CUTE attention templates is the
+                    # heaviest thing in this tree and forks cicc and ptxas per
+                    # translation unit, so "2 jobs" is not 2 processes. Serial
+                    # is slower and finishes; the registry cache means a re-run
+                    # resumes rather than starting over.
+                    MAX_JOBS=1
+                    CARGO_BUILD_JOBS=1
+                    BUILD_AND_DOWNLOAD_PARALLEL=1
                     INSTALL_FLASHINFER_JIT_CACHE=1
                     SGLANG_BUILD_COMMIT=${{ github.sha }}
                     SGLANG_BUILD_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -186,6 +215,21 @@ jobs:
                     io.rafay.upstream.version=${{ steps.tag.outputs.upstream }}
                     io.rafay.upstream.commit=${{ github.sha }}
                     io.rafay.tag=${{ steps.tag.outputs.tag }}
+
+            - name: Why did it die
+              if: failure()
+              # Runs only on failure, and only reads. If the OOM killer took a
+              # compiler -- or the runner agent -- it is recorded here and
+              # nowhere else GitHub can see.
+              run: |
+                echo "=== peak memory during build ==="
+                tail -5 /tmp/mem-sample.log 2>/dev/null || echo "(no samples)"
+                echo "=== kernel OOM kills ==="
+                sudo dmesg -T 2>/dev/null | grep -iE "out of memory|killed process|oom-kill" | tail -20 \
+                  || journalctl -k --since "-1h" --no-pager 2>/dev/null | grep -iE "out of memory|killed process|oom-kill" | tail -20 \
+                  || echo "(kernel log unreadable from this job -- check the runner host directly)"
+                echo "=== disk ==="
+                df -h / | tail -1
 
     bundle:
         name: Overlay the wheels
