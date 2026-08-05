@@ -56,7 +56,22 @@ jobs:
         # created. Real PRs are still covered; bot PRs are not worth a matrix
         # each, and the branch push that follows a merge tests the result anyway.
         if: github.actor != 'dependabot[bot]'
-        runs-on: ubuntu-latest
+        # `RAFAY_TEST_RUNNER`, deliberately **not** the `RAFAY_BUILD_RUNNER`
+        # the image build uses. They want opposite things:
+        #
+        #   * the build is one long job that needs a lot of memory, so a big
+        #     self-hosted box is right;
+        #   * this is a four-leg matrix of short jobs, and a self-hosted runner
+        #     takes one job at a time -- pointing the matrix at it serialises
+        #     the legs *and* queues them behind any running build. Faster
+        #     hardware, slower feedback.
+        #
+        # Default stays on GitHub-hosted, which runs the four legs in parallel.
+        # Set the variable to move them if hosted capacity becomes the problem.
+        runs-on: ${{ vars.RAFAY_TEST_RUNNER || 'ubuntu-latest' }}
+        # Same reasoning as the LMCache fork: the default 360 minutes turns a
+        # hang into a slow queue rather than a failure. This job runs in ~3.
+        timeout-minutes: 20
         steps:
             - name: Checkout
               uses: actions/checkout@v4
