@@ -175,10 +175,28 @@ class StorageOperation:
         last_hash: Optional[str] = None,
         hash_value: Optional[List[str]] = None,
         prefix_keys: Optional[List[str]] = None,
+        extra_key: Optional[str] = None,
     ):
         self.host_indices = host_indices
         self.token_ids = token_ids
+        # Rafay: seed the hash chain with the tenant scope when this operation
+        # starts a fresh sequence.
+        #
+        # This path hashes raw token ids -- there is no RadixKey here, so
+        # `extra_key` is not merely unused but unavailable, and every hash it
+        # produced was tenant-blind. Those hashes are the keys HiCacheStorage
+        # writes under, so two tenants sending identical tokens collided in
+        # host memory and on disk regardless of the radix tree keeping them
+        # apart in GPU memory.
+        #
+        # `last_hash` is already the chain seed the rest of this file threads
+        # through, so scoping it here scopes every descendant for free.
+        if last_hash is None and extra_key:
+            from sglang.srt.mem_cache.tenant_scope import tenant_scope_seed
+
+            last_hash = tenant_scope_seed(extra_key)
         self.last_hash = last_hash
+        self.extra_key = extra_key
         self.completed_tokens = 0
         self.hash_value = hash_value if hash_value is not None else []
         self.prefix_keys = prefix_keys
@@ -197,6 +215,7 @@ class PrefetchOperation(StorageOperation):
         token_ids: List[int],
         last_hash: Optional[str] = None,
         prefix_keys: Optional[List[str]] = None,
+        extra_key: Optional[str] = None,
     ):
         self.request_id = request_id
 
@@ -205,7 +224,9 @@ class PrefetchOperation(StorageOperation):
         self.storage_hit_count = 0
         self.start_time = time.monotonic()
 
-        super().__init__(None, token_ids, last_hash, prefix_keys=prefix_keys)
+        super().__init__(
+            None, token_ids, last_hash, prefix_keys=prefix_keys, extra_key=extra_key
+        )
 
     def increment(self, num_tokens: int):
         with self._lock:
@@ -903,12 +924,17 @@ class HiCacheController:
         new_input_tokens: List[int],
         last_hash: Optional[str] = None,
         prefix_keys: Optional[List[str]] = None,
+        extra_key: Optional[str] = None,
     ) -> PrefetchOperation:
         """
         Prefetch KV caches from storage backend to host memory.
+
+        Rafay: `extra_key` is the tenant scope (lora id, cache salt). It seeds
+        the hash chain when `last_hash` is None, so storage lookups are keyed
+        per tenant rather than by token content alone.
         """
         operation = PrefetchOperation(
-            request_id, new_input_tokens, last_hash, prefix_keys
+            request_id, new_input_tokens, last_hash, prefix_keys, extra_key=extra_key
         )
         self.prefetch_queue.put(operation)
         return operation
