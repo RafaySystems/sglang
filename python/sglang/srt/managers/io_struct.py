@@ -1141,6 +1141,14 @@ class EmbeddingReqInput:
 
 
 class TokenizedEmbeddingReqInput(BaseReq, kw_only=True):
+    # Rafay: tenant scope, as on TokenizedGenerateReqInput.
+    #
+    # Embeddings are prefill-only but they still go through the radix cache --
+    # handle_embedding_request builds a Req and calls
+    # _maybe_namespace_elastic_radix_cache, the same path that writes
+    # req.extra_key. Without this field the Req is constructed with no scope,
+    # so two tenants embedding identical text share cache entries.
+    extra_key: Optional[str] = None
     input_text: Optional[Union[str, List[Union[str, List[str]]]]]
     # The input token ids
     input_ids: Optional[array]  # array[int]

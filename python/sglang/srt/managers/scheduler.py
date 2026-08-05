@@ -2535,6 +2535,9 @@ class Scheduler(
             time_stats=recv_req.time_stats,
             return_pooled_hidden_states=recv_req.return_pooled_hidden_states,
             multi_item_delimiter_indices=recv_req.multi_item_delimiter_indices,
+            # Rafay: without this the embedding Req carried no scope, so two
+            # tenants embedding identical text shared radix entries.
+            extra_key=recv_req.extra_key,
         )
         req.tokenizer = self.tokenizer
         self._maybe_namespace_elastic_radix_cache(req)
