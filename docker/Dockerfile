@@ -395,6 +395,20 @@ FROM torch_deps AS hpc_ops_builder
 # hpc_ops attention and MoE runner backends.
 ARG HPC_OPS_COMMIT=2404f09766269d9533b66709f705c8eeb01421fc
 
+# Rafay: bound this build's parallelism.
+#
+# This stage compiles CUTLASS SM90 attention and MoE kernels -- the heaviest
+# translation units in the tree, several GB of nvcc each -- and upstream runs
+# it with no limit, so it fans out to nproc. On an 8-core/31 GiB runner that is
+# what killed the host: the job ended "The operation was canceled" 41 minutes
+# in, with the last log line mid-`hpc::attention::kernels`.
+#
+# The `MAX_JOBS` build-arg the workflow was already passing had no effect,
+# because nothing in this Dockerfile declares it. It is declared here, and
+# CMAKE_BUILD_PARALLEL_LEVEL is set alongside it because hpc-ops drives its
+# compile through CMake, which does not read MAX_JOBS.
+ARG MAX_JOBS=1
+
 WORKDIR /build
 
 # The kernels target Hopper (sm90a) only, so skip non-x86_64 images.
@@ -406,7 +420,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         git clone https://github.com/Tencent/hpc-ops.git && \
         cd hpc-ops && \
         git checkout ${HPC_OPS_COMMIT} && \
-        python3 setup.py bdist_wheel -d /wheels; \
+        MAX_JOBS=${MAX_JOBS} CMAKE_BUILD_PARALLEL_LEVEL=${MAX_JOBS} \
+            python3 setup.py bdist_wheel -d /wheels; \
     fi
 
 ########################################################
