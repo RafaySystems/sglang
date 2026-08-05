@@ -189,49 +189,34 @@ jobs:
                 # evicts is worse than none.
                 cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:buildcache
                 cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max,ignore-error=true
+                # NOTE: every line here is parsed as KEY=VALUE by
+                # docker/build-push-action. A comment line does not become a
+                # comment -- it becomes a build-arg named "#". Keep rationale
+                # above this key, never inside it.
+                #
+                #   MAX_JOBS / BUILD_AND_DOWNLOAD_PARALLEL: bound compile fan-out.
+                #   BUILD_MODEL_GATEWAY=0: this image never invokes the Rust
+                #     gateway; routing is smg-gmaas in its own image.
+                #   BUILD_HPC_OPS=0: measured 31702 MB of 31 GiB in that stage
+                #     even at MAX_JOBS=1, which it does not honour. Nothing under
+                #     python/sglang imports hpc_ops.
+                #   INSTALL_FLASHINFER_JIT_CACHE=1: a prebuilt wheel, not a
+                #     compile. Kept -- it removes first-request JIT work, which
+                #     is what scale-to-zero cold starts pay for.
+                #   RAFAY_CUDA_ARCH_LIST: empty keeps upstream's per-CUDA list.
                 build-args: |
                     BRANCH_TYPE=local
                     UBUNTU_MIRROR=${{ github.event.inputs.ubuntu_mirror || vars.RAFAY_UBUNTU_MIRROR || 'https://archive.ubuntu.com/ubuntu' }}
-                    # 1, not 2. Run 30929746689 died 41 minutes in, mid-nvcc,
-                    # with no compiler error: the log stopped and the job ended
-                    # "The operation was canceled" -- the self-hosted runner
-                    # stopped answering, which is what a host OOM looks like
-                    # from GitHub's side. The same workload killed the Jenkins
-                    # agent outright ("Cannot contact node-1").
-                    #
-                    # nvcc on SM90 CUTLASS/CUTE attention templates is the
-                    # heaviest thing in this tree and forks cicc and ptxas per
-                    # translation unit, so "2 jobs" is not 2 processes. Serial
-                    # is slower and finishes; the registry cache means a re-run
-                    # resumes rather than starting over.
                     MAX_JOBS=1
                     CARGO_BUILD_JOBS=1
                     BUILD_AND_DOWNLOAD_PARALLEL=1
-                    # A prebuilt wheel install, not a compile -- it costs disk
-                    # and download time, not memory, so disabling it does not
-                    # help an OOM. Kept on because it removes first-request JIT
-                    # compilation, which matters directly for scale-to-zero
-                    # cold starts.
                     INSTALL_FLASHINFER_JIT_CACHE=1
-                    # Empty keeps upstream's per-CUDA-version arch list; on
-                    # CUDA 13 that is '9.0;10.0;10.3', three architectures and
-                    # therefore three times the nvcc memory. Set to '9.0' to
-                    # build H100 only if the build is still memory-bound after
-                    # MAX_JOBS=1 -- the largest single lever available, and one
-                    # that narrows what the image can run on, so it is a
-                    # deliberate choice rather than a default.
                     RAFAY_CUDA_ARCH_LIST=${{ vars.RAFAY_CUDA_ARCH_LIST }}
-                    # 0: do not build sgl-model-gateway into the engine image.
-                    # It costs a Rust toolchain install and two --release builds
-                    # (one with vendored OpenSSL) to produce a binary and a
-                    # `sglang-router` wheel this image never invokes -- it serves
-                    # gRPC through smg-grpc-servicer, and routing is smg-gmaas in
-                    # its own image. The wheel is referenced only by upstream
-                    # test utilities and docs, not by anything under srt/.
                     BUILD_MODEL_GATEWAY=0
                     SGLANG_BUILD_COMMIT=${{ github.sha }}
                     SGLANG_BUILD_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
                     SGLANG_IMAGE_TAG=${{ steps.tag.outputs.image }}
+                    BUILD_HPC_OPS=0
                 labels: |
                     io.rafay.upstream.version=${{ steps.tag.outputs.upstream }}
                     io.rafay.upstream.commit=${{ github.sha }}

@@ -409,6 +409,21 @@ ARG HPC_OPS_COMMIT=2404f09766269d9533b66709f705c8eeb01421fc
 # compile through CMake, which does not read MAX_JOBS.
 ARG MAX_JOBS=1
 
+# Rafay: skip this build entirely when the kernels are not used.
+#
+# Measured: with MAX_JOBS=1 and CMAKE_BUILD_PARALLEL_LEVEL=1 set, this stage
+# still drove the host to 31702 MB of 31 GiB and the runner died mid-compile at
+# `hpc::attention::kernels`. It does not honour either knob, so bounding
+# parallelism is not available as a remedy here.
+#
+# Nothing under python/sglang imports hpc_ops -- the wheel feeds opt-in
+# attention and MoE runner backends we do not select. The install step below
+# is already written to tolerate an absent wheel ("empty on non-x86_64"), so
+# skipping the build needs no other change.
+#
+# Default 1 keeps upstream behaviour; set 0 to skip.
+ARG BUILD_HPC_OPS=1
+
 WORKDIR /build
 
 # The kernels target Hopper (sm90a) only, so skip non-x86_64 images.
@@ -416,7 +431,9 @@ WORKDIR /build
 # (a source zip archive would not build).
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p /wheels && \
-    if [ "$(uname -m)" = "x86_64" ]; then \
+    if [ "$BUILD_HPC_OPS" != "1" ]; then \
+        echo "Rafay: BUILD_HPC_OPS=$BUILD_HPC_OPS -- skipping the hpc-ops kernel build"; \
+    elif [ "$(uname -m)" = "x86_64" ]; then \
         git clone https://github.com/Tencent/hpc-ops.git && \
         cd hpc-ops && \
         git checkout ${HPC_OPS_COMMIT} && \
