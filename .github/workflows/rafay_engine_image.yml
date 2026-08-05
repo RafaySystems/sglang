@@ -207,7 +207,20 @@ jobs:
                     MAX_JOBS=1
                     CARGO_BUILD_JOBS=1
                     BUILD_AND_DOWNLOAD_PARALLEL=1
+                    # A prebuilt wheel install, not a compile -- it costs disk
+                    # and download time, not memory, so disabling it does not
+                    # help an OOM. Kept on because it removes first-request JIT
+                    # compilation, which matters directly for scale-to-zero
+                    # cold starts.
                     INSTALL_FLASHINFER_JIT_CACHE=1
+                    # Empty keeps upstream's per-CUDA-version arch list; on
+                    # CUDA 13 that is '9.0;10.0;10.3', three architectures and
+                    # therefore three times the nvcc memory. Set to '9.0' to
+                    # build H100 only if the build is still memory-bound after
+                    # MAX_JOBS=1 -- the largest single lever available, and one
+                    # that narrows what the image can run on, so it is a
+                    # deliberate choice rather than a default.
+                    RAFAY_CUDA_ARCH_LIST=${{ vars.RAFAY_CUDA_ARCH_LIST }}
                     SGLANG_BUILD_COMMIT=${{ github.sha }}
                     SGLANG_BUILD_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
                     SGLANG_IMAGE_TAG=${{ steps.tag.outputs.image }}

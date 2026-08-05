@@ -349,6 +349,10 @@ RUN set -eux; \
         cd .. ; \
     fi
 
+# Rafay: optional narrowing of the CUDA arch list (see below). Declared here so
+# the build stage can see it; empty means upstream's per-CUDA-version choice.
+ARG RAFAY_CUDA_ARCH_LIST=""
+
 # Build DeepEP wheel
 RUN --mount=type=cache,target=/root/.cache/pip \
     cd /build/DeepEP && \
@@ -366,6 +370,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
             echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 \
             ;; \
     esac && \
+    # Rafay: allow the arch list to be narrowed to what we actually deploy.
+    # CUDA 13 selects '9.0;10.0;10.3' above -- three architectures, so three
+    # times the nvcc work and memory for hardware we may not ship. Setting
+    # RAFAY_CUDA_ARCH_LIST=9.0 builds H100 only. Empty keeps upstream's choice,
+    # so this is inert unless deliberately set.
+    if [ -n "${RAFAY_CUDA_ARCH_LIST}" ]; then \
+        echo "Rafay: overriding arch list ${CHOSEN_TORCH_CUDA_ARCH_LIST} -> ${RAFAY_CUDA_ARCH_LIST}"; \
+        CHOSEN_TORCH_CUDA_ARCH_LIST="${RAFAY_CUDA_ARCH_LIST}"; \
+    fi && \
     if [ "${CUDA_VERSION%%.*}" = "13" ]; then \
         sed -i "/^    include_dirs = \['csrc\/'\]/a\    include_dirs.append('${CUDA_HOME}/include/cccl')" setup.py; \
     fi && \
