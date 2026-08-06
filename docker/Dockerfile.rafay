@@ -59,9 +59,25 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     set -eu; \
     ls /tmp/rafay-wheels/mooncake/*.whl >/dev/null 2>&1 || { echo "no Mooncake wheel in ${MOONCAKE_WHEEL_IMAGE}"; exit 1; }; \
     ls /tmp/rafay-wheels/lmcache/*.whl  >/dev/null 2>&1 || { echo "no LMCache wheel in ${LMCACHE_WHEEL_IMAGE}";  exit 1; }; \
-    python3 -m pip install --force-reinstall --no-deps \
-        /tmp/rafay-wheels/mooncake/*.whl \
-        /tmp/rafay-wheels/lmcache/*.whl; \
+    # A wheel image holds every Python version its matrix built -- Mooncake's
+    # covers 3.10 through 3.13. Installing the glob hands pip all of them and
+    # it refuses the first one that does not match this interpreter:
+    # "mooncake_transfer_engine_cuda13-...-cp310-cp310-...whl is not a
+    # supported wheel on this platform". The wheel is not wrong; the selection
+    # was. Let pip choose from the directory instead, by name.
+    PYTAG="cp$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"; \
+    echo "selecting wheels for ${PYTAG}"; \
+    select_wheel() { \
+        ls "$1"/*"${PYTAG}"*.whl 2>/dev/null | head -1 \
+          || ls "$1"/*-py3-none-any.whl 2>/dev/null | head -1 \
+          || ls "$1"/*abi3*.whl 2>/dev/null | head -1; \
+    }; \
+    MOONCAKE_WHL="$(select_wheel /tmp/rafay-wheels/mooncake)"; \
+    LMCACHE_WHL="$(select_wheel /tmp/rafay-wheels/lmcache)"; \
+    [ -n "$MOONCAKE_WHL" ] || { echo "no Mooncake wheel for ${PYTAG} in ${MOONCAKE_WHEEL_IMAGE}"; ls /tmp/rafay-wheels/mooncake; exit 1; }; \
+    [ -n "$LMCACHE_WHL" ]  || { echo "no LMCache wheel for ${PYTAG} in ${LMCACHE_WHEEL_IMAGE}";  ls /tmp/rafay-wheels/lmcache;  exit 1; }; \
+    echo "installing $MOONCAKE_WHL and $LMCACHE_WHL"; \
+    python3 -m pip install --force-reinstall --no-deps "$MOONCAKE_WHL" "$LMCACHE_WHL"; \
     rm -rf /tmp/rafay-wheels
 
 # Prove the overlay took, and that the wheels actually load.
