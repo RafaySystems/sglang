@@ -811,6 +811,19 @@ RUN if [ "$BRANCH_TYPE" = "local" ]; then \
     fi \
     && rm -rf /tmp/local_src
 
+# Rafay: give setuptools-scm a PEP 440 version.
+#
+# With BRANCH_TYPE=local the source carries our git history, and our release
+# tags look like `v0.5.16-rafay.3`. setuptools-scm cannot parse that -- it
+# fails with "Can't parse version from tag" and the editable install dies.
+# The tag format is deliberate and used for image tags, so the fix is to tell
+# setuptools-scm what to call this build instead of changing how we tag.
+#
+# Empty leaves setuptools-scm to its own devices, so this is inert for anyone
+# building from an upstream checkout.
+ARG SETUPTOOLS_SCM_PRETEND_VERSION=""
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+
 # Editable install (fast - dependencies already installed via constraints)
 # Clean up __pycache__/tests/pyc in same RUN to avoid writing ~28k files to layer
 RUN --mount=type=cache,target=/root/.cache/pip \

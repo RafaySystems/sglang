@@ -65,6 +65,7 @@ jobs:
         outputs:
             tag: ${{ steps.tag.outputs.tag }}
             upstream: ${{ steps.tag.outputs.upstream }}
+            pep440: ${{ steps.tag.outputs.pep440 }}
             image: ${{ steps.tag.outputs.image }}
         steps:
             - name: Checkout
@@ -84,6 +85,10 @@ jobs:
                 UPSTREAM="${TAG%-rafay.*}"
                 echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
                 echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+                # setuptools-scm needs PEP 440, and our tag is not:
+                # v0.5.16-rafay.3 -> 0.5.16+rafay.3 (a local version segment,
+                # which is exactly what "same upstream, our build" means).
+                echo "pep440=${UPSTREAM#v}+${TAG#*-}" >> "$GITHUB_OUTPUT"
                 echo "image=${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:$TAG" >> "$GITHUB_OUTPUT"
 
                 # The delta is the fork's liability, so surface it every build.
@@ -217,6 +222,7 @@ jobs:
                     SGLANG_BUILD_URL=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
                     SGLANG_IMAGE_TAG=${{ steps.tag.outputs.image }}
                     BUILD_HPC_OPS=0
+                    SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.tag.outputs.pep440 }}
                 labels: |
                     io.rafay.upstream.version=${{ steps.tag.outputs.upstream }}
                     io.rafay.upstream.commit=${{ github.sha }}
