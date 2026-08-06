@@ -95,17 +95,29 @@ RUN python3 - <<'PY'
 import importlib.metadata as md
 import os, sys
 
+# Mooncake publishes a distribution per CUDA major -- the CUDA 13 build is
+# `mooncake-transfer-engine-cuda13`, not `mooncake-transfer-engine`. Match on
+# prefix so a CUDA bump does not fail this check for the wrong reason: the
+# first run reported "mooncake-transfer-engine: not installed" about a package
+# that was installed and imported perfectly well.
+def find_installed(prefix):
+    for dist in md.distributions():
+        name = (dist.metadata["Name"] or "").lower().replace("_", "-")
+        if name == prefix or name.startswith(prefix + "-"):
+            return name, dist.version
+    return None, None
+
 expected = {
     "mooncake-transfer-engine": os.environ.get("EXPECT_MOONCAKE", ""),
     "lmcache": os.environ.get("EXPECT_LMCACHE", ""),
 }
 problems = []
 for pkg, want in expected.items():
-    try:
-        got = md.version(pkg)
-    except md.PackageNotFoundError:
-        problems.append(f"{pkg}: not installed")
+    name, got = find_installed(pkg)
+    if got is None:
+        problems.append(f"{pkg}: not installed (no distribution matching '{pkg}*')")
         continue
+    pkg = name
     # Substring rather than equality: a wheel built from a Rafay tag may carry a
     # local version segment (e.g. 0.3.12.post1+rafay.1) that does not match the
     # tag string byte for byte. What must hold is that it is *ours*.
@@ -130,7 +142,8 @@ if problems:
           "matching this image.")
     sys.exit(1)
 print("Rafay overlay verified against torch", torch.__version__,
-      {k: md.version(k) for k in expected})
+      "| cuda", torch.version.cuda, "|",
+      {n: v for n, v in (find_installed(k) for k in expected) if n})
 PY
 
 LABEL io.rafay.bundle="${BUNDLE_VERSION}" \
