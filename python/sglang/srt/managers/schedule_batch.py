@@ -638,6 +638,30 @@ class MultimodalInputs:
                 video_tokens += num_tokens
         return image_tokens, audio_tokens, video_tokens
 
+    def compute_mm_item_counts(self) -> Tuple[int, int, int]:
+        """Count multimodal ITEMS per modality: (images, audios, videos).
+
+        Rafay: billing needs both the item count and the token count. Token
+        count alone cannot express a per-image fee, and item count alone cannot
+        express the cost difference between a thumbnail and a 4K image -- the
+        two together let a price formula be `n * item_fee + tokens * token_rate`.
+
+        Counts only items with offsets, matching `compute_mm_token_counts`, so
+        an item that contributed no prompt tokens is not billed as an item
+        either.
+        """
+        image_count = audio_count = video_count = 0
+        for item in self.mm_items:
+            if not item.offsets:
+                continue
+            if item.is_image():
+                image_count += 1
+            elif item.is_audio():
+                audio_count += 1
+            elif item.is_video():
+                video_count += 1
+        return image_count, audio_count, video_count
+
     def merge(self, other: MultimodalInputs):
         """
         merge image inputs when requests are being merged

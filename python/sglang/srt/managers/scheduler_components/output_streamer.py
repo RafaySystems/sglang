@@ -281,6 +281,12 @@ class _GenerationStreamAccumulator:
     image_tokens: list = field(default_factory=list)
     audio_tokens: list = field(default_factory=list)
     video_tokens: list = field(default_factory=list)
+    # Rafay: per-modality ITEM counts alongside the token counts. A price
+    # formula needs both -- tokens alone cannot express a per-image fee, and a
+    # count alone cannot distinguish a thumbnail from a 4K image.
+    image_count: list = field(default_factory=list)
+    audio_count: list = field(default_factory=list)
+    video_count: list = field(default_factory=list)
     spec_verify_ct: list = field(default_factory=list)
     spec_num_correct_drafts: list = field(default_factory=list)
     spec_num_block_accept_tokens: list = field(default_factory=list)
@@ -411,6 +417,19 @@ class _GenerationStreamAccumulator:
         self.image_tokens.append(image_t)
         self.audio_tokens.append(audio_t)
         self.video_tokens.append(video_t)
+
+        # Rafay: item counts. Derived from the request's multimodal items; in
+        # disagg decode the items are not present on this node, so the count is
+        # 0 there and the prefill node's value is authoritative. Deliberately
+        # not inferred from a non-zero token count -- one image and five images
+        # are indistinguishable that way.
+        if req.multimodal_inputs:
+            image_n, audio_n, video_n = req.multimodal_inputs.compute_mm_item_counts()
+        else:
+            image_n = audio_n = video_n = 0
+        self.image_count.append(image_n)
+        self.audio_count.append(audio_n)
+        self.video_count.append(video_n)
 
         self.retraction_counts.append(req.retraction_count)
 
@@ -584,6 +603,9 @@ class _GenerationStreamAccumulator:
             image_tokens=self.image_tokens,
             audio_tokens=self.audio_tokens,
             video_tokens=self.video_tokens,
+            image_count=self.image_count,
+            audio_count=self.audio_count,
+            video_count=self.video_count,
             input_token_logprobs_val=self.input_token_logprobs_val,
             input_token_logprobs_idx=self.input_token_logprobs_idx,
             output_token_logprobs_val=self.output_token_logprobs_val,

@@ -80,6 +80,35 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install --force-reinstall --no-deps "$MOONCAKE_WHL" "$LMCACHE_WHL"; \
     rm -rf /tmp/rafay-wheels
 
+# `--no-deps` above is right, and it is also why this block has to exist.
+#
+# It stops the fork's metadata repinning the base's torch. What it ALSO stops
+# is LMCache's ordinary runtime dependencies being installed at all -- and the
+# base SGLang image does not carry them, because upstream treats LMCache as
+# optional. The image therefore shipped an `lmcache` that imports at the top
+# level and dies the moment anything real touches it:
+#
+#     RuntimeError: LMCache is not installed.
+#     Please install it by running `pip install lmcache`
+#
+# raised by sglang's lmc_radix_cache.py, on an image where lmcache IS installed
+# and only `cachetools` was absent. `--enable-lmcache` could not start, so the
+# tenant scoping in lmcache/integration/sglang/tenant_scope.py -- which is in
+# the wheel and works -- was unreachable in the shipped artefact.
+#
+# This list is the closure the SGLang+Mooncake path actually needs, resolved by
+# importing LMCRadixCache until it stopped raising. It is deliberately NOT
+# lmcache's full 37-package requires: that set pulls cupy, google-cloud-bigtable
+# and awscrt for backends we do not run.
+#
+# Deps only, no fork wheels -- so nothing here can replace what was installed
+# above. The torch import in the verification below is what catches it if pip
+# resolves something that disturbs the base.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
+      cachetools aiofiles aiofile redis py-cpuinfo httptools \
+      opentelemetry-sdk opentelemetry-exporter-prometheus opentelemetry-exporter-otlp
+
 # Prove the overlay took, and that the wheels actually load.
 #
 # **This is where the torch ABI pairing is checked.** The wheel pipelines build
@@ -134,6 +163,46 @@ for mod in ("mooncake", "lmcache"):
         problems.append(
             f"{mod}: installed but will not import against torch {torch.__version__} "
             f"(cuda {torch.version.cuda}) -- {type(exc).__name__}: {exc}"
+        )
+
+# Import what the ENGINE imports, not what is convenient to import.
+#
+# `import lmcache` succeeds on an image where LMCache cannot be used at all:
+# lmcache/__init__.py never touches lmcache.utils, so the missing `cachetools`
+# stays hidden until mem_cache/registry.py builds the cache. That is exactly
+# how a broken image passed this check and shipped -- the guard was true and
+# meaningless at the same time.
+#
+# These two are the real entry points: the class registry.py instantiates for
+# --enable-lmcache, and the connector that reaches Mooncake. If either cannot
+# be imported here, --enable-lmcache cannot start in a serving pod.
+#
+# Be precise about what the Mooncake import does and does NOT prove.
+# `lmcache.lmcache_mooncake` STATICALLY links libmooncake_store at wheel-build
+# time, so it carries its own copy of the store client and does not resolve
+# against the Mooncake wheel installed above. The import therefore proves the
+# extension loads; it says nothing about the two agreeing on a version.
+#
+# The residual risk is a *protocol* mismatch: the extension's embedded client
+# talking to a `mooncake_master` binary from a differently-versioned wheel.
+# Nothing here catches that, and an import check never will. The real guard is
+# to keep the LMCache wheel's MOONCAKE_REF and this bundle's MOONCAKE_VERSION
+# on the same upstream release, and to assert that mechanically once the
+# LMCache wheel image records the ref it was built against.
+for label, stmt in (
+    ("LMCRadixCache (--enable-lmcache entry point)",
+     "from sglang.srt.mem_cache.storage.lmcache.lmc_radix_cache import LMCRadixCache"),
+    ("LMCache's Mooncake connector",
+     "from lmcache.v1.storage_backend.connector.mooncakestore_connector "
+     "import MooncakestoreConnector"),
+):
+    try:
+        exec(stmt)
+    except Exception as exc:
+        problems.append(
+            f"{label}: {type(exc).__name__}: {exc}\n"
+            "    (a missing dependency here means --enable-lmcache dies at startup;\n"
+            "     sglang reports it as the misleading 'LMCache is not installed')"
         )
 
 if problems:

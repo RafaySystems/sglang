@@ -1293,6 +1293,11 @@ class BatchTokenIDOutput(BaseBatchReq, kw_only=True):
     image_tokens: Optional[List[int]] = None
     audio_tokens: Optional[List[int]] = None
     video_tokens: Optional[List[int]] = None
+    # Rafay: per-modality ITEM counts, for billing formulas that combine a
+    # per-item fee with a per-token rate.
+    image_count: Optional[List[int]] = None
+    audio_count: Optional[List[int]] = None
+    video_count: Optional[List[int]] = None
 
     # Verify count: number of verification forward passes
     spec_verify_ct: Optional[List[int]] = None
@@ -1375,6 +1380,11 @@ class BatchStrOutput(BaseBatchReq, kw_only=True):
     image_tokens: Optional[List[int]] = None
     audio_tokens: Optional[List[int]] = None
     video_tokens: Optional[List[int]] = None
+    # Rafay: per-modality ITEM counts, for billing formulas that combine a
+    # per-item fee with a per-token rate.
+    image_count: Optional[List[int]] = None
+    audio_count: Optional[List[int]] = None
+    video_count: Optional[List[int]] = None
 
     # Verify count: number of verification forward passes
     spec_verify_ct: Optional[List[int]] = None
