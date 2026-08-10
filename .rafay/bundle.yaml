@@ -13,7 +13,7 @@
 # its own. It is a dated set of things known to work together, and a SemVer
 # number would invite compatibility reasoning the bundle does not support.
 
-bundle: 2026.08.1
+bundle: 2026.08.2
 
 components:
     # sglang is this repository at the tag being built — not named here, or it
@@ -23,7 +23,7 @@ components:
         tag: v0.3.12.post1-rafay.1
     lmcache:
         image: registry.dev.rafay-edge.net/rafay/gmaas-lmcache-wheel
-        tag: v0.5.2-rafay.2
+        tag: v0.5.2-rafay.12
 
 # Torch must agree across all three or the wheels will not import into the
 # engine. 2.11.0 is pinned identically in SGLang v0.5.16's [project] and
