@@ -56,6 +56,41 @@ class LMCacheMode(enum.Enum):
     IP = enum.auto()  # in-process mode
 
 
+class _NullStream:
+    """Stand-in for a CUDA stream on devices that have none.
+
+    Every method is a no-op and it is its own context manager, so the
+    stream-ordered code paths read identically on CPU and GPU. On CPU the
+    transfers are synchronous, so "wait for the stream" is already true.
+    """
+
+    def synchronize(self) -> None:  # noqa: D102
+        pass
+
+    def wait_stream(self, _other) -> None:  # noqa: D102
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+def _current_stream():
+    """The current stream, or a null stream when there is no accelerator."""
+    if torch.cuda.is_available():
+        return torch.cuda.current_stream()
+    return _NullStream()
+
+
+def _stream_ctx(stream):
+    """`torch.cuda.stream` on CUDA; the null stream is its own context."""
+    if torch.cuda.is_available():
+        return torch.cuda.stream(stream)
+    return stream
+
+
 class LayerTransferCounter:
     """Minimal adapter that lets the memory pool notify LMCache per-layer.
 
@@ -131,8 +166,19 @@ class LMCRadixCache(RadixCache):
             tp_group=tp_group.device_group if tp_group is not None else None,
         )
 
-        self.load_stream = torch.cuda.Stream()
-        self.store_stream = torch.cuda.Stream()
+        # Rafay: CPU has no CUDA streams, and these were created
+        # unconditionally -- so --enable-lmcache died at construction with
+        # "torch.cuda.Stream requires CUDA support" on a CPU engine, even
+        # though LMCache itself, its MP server and the Mooncake L2 adapter all
+        # run there. A null stream keeps every call site below unchanged: on
+        # CPU the transfers are simply synchronous, which is what "no stream"
+        # means.
+        if torch.cuda.is_available():
+            self.load_stream = torch.cuda.Stream()
+            self.store_stream = torch.cuda.Stream()
+        else:
+            self.load_stream = _NullStream()
+            self.store_stream = _NullStream()
 
         # MP is the default. To use the in-process layerwise connector,
         # set ``self._mode = LMCacheMode.IP`` here.
@@ -393,8 +439,8 @@ class LMCRadixCache(RadixCache):
         """MP non-layerwise loader: fire ``retrieve_kv`` and wait for the
         load_stream so the compute stream observes the writes.
         """
-        self.load_stream.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(self.load_stream):
+        self.load_stream.wait_stream(_current_stream())
+        with _stream_ctx(self.load_stream):
             n = self.lmcache_connector.retrieve_kv(
                 LoadMetadata(
                     token_ids=marker.key.token_ids,
@@ -405,7 +451,7 @@ class LMCRadixCache(RadixCache):
                     extra_key=marker.key.extra_key,
                 )
             )
-        torch.cuda.current_stream().wait_stream(self.load_stream)
+        _current_stream().wait_stream(self.load_stream)
         return n
 
     def _ip_load_back(
