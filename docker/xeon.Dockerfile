@@ -1,8 +1,21 @@
+# Rafay: local source if building from local. Mirrors docker/Dockerfile's
+# `local_src` stage so both paths carry OUR SGLang, not upstream's.
+FROM scratch AS local_src
+COPY . /src
+
 FROM ubuntu:24.04
 SHELL ["/bin/bash", "-c"]
 
 ARG SGLANG_REPO=https://github.com/sgl-project/sglang.git
 ARG VER_SGLANG=main
+
+# Rafay: "local" builds the working tree instead of cloning. Default is
+# "remote", so upstream behaviour is unchanged and this is inert unless set.
+#
+# Without this the CPU image could only ever be built from upstream SGLang,
+# which is how it came to ship an smg-grpc-servicer that does not match our
+# protos -- see kubeless-me/docs/model-engine-cpu-grpc.md.
+ARG BRANCH_TYPE=remote
 
 RUN apt-get update && \
     apt-get full-upgrade -y && \
@@ -33,11 +46,23 @@ RUN echo -e '[[index]]\nname = "torch"\nurl = "https://download.pytorch.org/whl/
 ENV UV_CONFIG_FILE=/opt/.venv/uv.toml
 
 WORKDIR /sgl-workspace
+COPY --from=local_src /src /tmp/local_src
+
+# Rafay: give setuptools-scm a PEP 440 version. With BRANCH_TYPE=local the
+# source carries our git history and our tags look like `v0.5.16-rafay.3`,
+# which setuptools-scm cannot parse. Same reasoning as docker/Dockerfile.
+ARG SETUPTOOLS_SCM_PRETEND_VERSION=""
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+
 RUN source /opt/.venv/bin/activate && \
-    git clone ${SGLANG_REPO} sglang && \
-    cd sglang && \
-    git checkout ${VER_SGLANG} && \
-    cd python && \
+    if [ "$BRANCH_TYPE" = "local" ]; then \
+        cp -r /tmp/local_src sglang; \
+    else \
+        git clone ${SGLANG_REPO} sglang && \
+        cd sglang && git checkout ${VER_SGLANG} && cd ..; \
+    fi && \
+    rm -rf /tmp/local_src && \
+    cd sglang/python && \
     cp pyproject_cpu.toml pyproject.toml && \
     uv pip install . && \
     cd ../sgl-kernel && \
